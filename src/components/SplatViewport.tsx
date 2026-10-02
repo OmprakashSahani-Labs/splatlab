@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import type { SplatMesh } from '@sparkjsdev/spark'
 import type { LocalGaussianAsset } from '../assets/localAsset'
+import type { CapturedCamera } from '../core/camera'
+import { applyCapturedCamera } from '../rendering/capturedCamera'
 import {
   createSparkRenderSession,
   renderSparkSession,
@@ -12,15 +14,18 @@ import { loadLocalSplatMesh, disposeSplatMesh } from '../rendering/sparkAsset'
 
 export interface SplatViewportProps {
   readonly asset?: LocalGaussianAsset | null
+  readonly camera?: CapturedCamera | null
   readonly onAssetLoadError?: (error: unknown) => void
 }
 
 /**
  * SplatViewport owns THREE.WebGLRenderer and owns and disposes each attached SplatMesh.
  * SparkRenderSession owns the scene, camera, and SparkRenderer.
+ * A provided CapturedCamera updates the existing session camera without replacing it.
  */
 export default function SplatViewport({
   asset = null,
+  camera = null,
   onAssetLoadError,
 }: SplatViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -71,6 +76,13 @@ export default function SplatViewport({
       renderer.dispose()
     }
   }, [])
+
+  useEffect(() => {
+    const session = sessionRef.current
+    if (!camera || !session) return
+
+    applyCapturedCamera(session.camera, camera)
+  }, [camera])
 
   useEffect(() => {
     const session = sessionRef.current

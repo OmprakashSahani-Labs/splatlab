@@ -5,6 +5,8 @@ import { cleanup, render, waitFor } from '@testing-library/react'
 import * as THREE from 'three'
 import type { SplatMesh } from '@sparkjsdev/spark'
 import type { LocalGaussianAsset } from '../assets/localAsset'
+import type { CapturedCamera } from '../core/camera'
+import { applyCapturedCamera } from '../rendering/capturedCamera'
 import {
   createSparkRenderSession,
   disposeSparkRenderSession,
@@ -27,6 +29,10 @@ vi.mock('../rendering/renderSession', () => ({
 vi.mock('../rendering/sparkAsset', () => ({
   loadLocalSplatMesh: vi.fn(),
   disposeSplatMesh: vi.fn(),
+}))
+
+vi.mock('../rendering/capturedCamera', () => ({
+  applyCapturedCamera: vi.fn(),
 }))
 
 const renderer = {
@@ -52,6 +58,26 @@ function createAsset(id: string): LocalGaussianAsset {
 
 function createMesh(name: string): SplatMesh {
   return { name } as unknown as SplatMesh
+}
+
+function createCamera(id: string): CapturedCamera {
+  return {
+    id,
+    pose: {
+      position: [1, 2, 3],
+      quaternion: [0, 0, 0, 1],
+    },
+    intrinsics: {
+      width: 1920,
+      height: 1080,
+      fx: 1000,
+      fy: 1000,
+      cx: 960,
+      cy: 540,
+      near: 0.01,
+      far: 1000,
+    },
+  }
 }
 
 function deferred<T>() {
@@ -207,5 +233,67 @@ describe('SplatViewport asset lifecycle', () => {
     })
     expect(onError).not.toHaveBeenCalled()
     expect(disposeSplatMesh).not.toHaveBeenCalled()
+  })
+})
+
+describe('SplatViewport captured camera', () => {
+  it('applies a captured camera to the existing session camera', async () => {
+    const camera = createCamera('camera')
+
+    render(<SplatViewport camera={camera} />)
+
+    await waitFor(() => {
+      expect(applyCapturedCamera).toHaveBeenCalledExactlyOnceWith(session.camera, camera)
+    })
+    expect(vi.mocked(applyCapturedCamera).mock.calls[0][0]).toBe(session.camera)
+    expect(vi.mocked(applyCapturedCamera).mock.calls[0][1]).toBe(camera)
+    expect(THREE.WebGLRenderer).toHaveBeenCalledOnce()
+    expect(createSparkRenderSession).toHaveBeenCalledOnce()
+    expect(disposeSparkRenderSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the renderer, session, and loaded asset stable when the camera changes', async () => {
+    const asset = createAsset('asset')
+    const mesh = createMesh('mesh')
+    const cameraA = createCamera('camera-a')
+    const cameraB = createCamera('camera-b')
+    vi.mocked(loadLocalSplatMesh).mockResolvedValueOnce(mesh)
+
+    const { rerender } = render(<SplatViewport asset={asset} camera={cameraA} />)
+    await waitFor(() => {
+      expect(session.scene.add).toHaveBeenCalledExactlyOnceWith(mesh)
+      expect(applyCapturedCamera).toHaveBeenCalledExactlyOnceWith(session.camera, cameraA)
+    })
+
+    rerender(<SplatViewport asset={asset} camera={cameraB} />)
+
+    await waitFor(() => {
+      expect(applyCapturedCamera).toHaveBeenCalledTimes(2)
+      expect(applyCapturedCamera).toHaveBeenNthCalledWith(2, session.camera, cameraB)
+    })
+    expect(vi.mocked(applyCapturedCamera).mock.calls[1][0]).toBe(session.camera)
+    expect(THREE.WebGLRenderer).toHaveBeenCalledOnce()
+    expect(createSparkRenderSession).toHaveBeenCalledOnce()
+    expect(loadLocalSplatMesh).toHaveBeenCalledExactlyOnceWith(asset)
+    expect(disposeSplatMesh).not.toHaveBeenCalled()
+    expect(session.scene.add).toHaveBeenCalledExactlyOnceWith(mesh)
+    expect(disposeSparkRenderSession).not.toHaveBeenCalled()
+    expect(renderer.dispose).not.toHaveBeenCalled()
+  })
+
+  it('does not reset the current camera when the camera prop becomes null', async () => {
+    const cameraA = createCamera('camera-a')
+    const { rerender } = render(<SplatViewport camera={cameraA} />)
+    await waitFor(() => {
+      expect(applyCapturedCamera).toHaveBeenCalledExactlyOnceWith(session.camera, cameraA)
+    })
+
+    rerender(<SplatViewport camera={null} />)
+
+    expect(applyCapturedCamera).toHaveBeenCalledOnce()
+    expect(THREE.WebGLRenderer).toHaveBeenCalledOnce()
+    expect(createSparkRenderSession).toHaveBeenCalledOnce()
+    expect(disposeSparkRenderSession).not.toHaveBeenCalled()
+    expect(renderer.dispose).not.toHaveBeenCalled()
   })
 })
