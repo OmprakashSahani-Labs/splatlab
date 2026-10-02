@@ -1,17 +1,31 @@
 import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
+import type { SplatMesh } from '@sparkjsdev/spark'
+import type { LocalGaussianAsset } from '../assets/localAsset'
 import {
   createSparkRenderSession,
   renderSparkSession,
   disposeSparkRenderSession,
+  type SparkRenderSession,
 } from '../rendering/renderSession'
+import { loadLocalSplatMesh, disposeSplatMesh } from '../rendering/sparkAsset'
+
+export interface SplatViewportProps {
+  readonly asset?: LocalGaussianAsset | null
+  readonly onAssetLoadError?: (error: unknown) => void
+}
 
 /**
- * Owns the WebGLRenderer; SparkRenderSession owns the scene, camera, and Spark.
- * Assets will have their own explicit lifecycle.
+ * SplatViewport owns THREE.WebGLRenderer and owns and disposes each attached SplatMesh.
+ * SparkRenderSession owns the scene, camera, and SparkRenderer.
  */
-export default function SplatViewport() {
+export default function SplatViewport({
+  asset = null,
+  onAssetLoadError,
+}: SplatViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const sessionRef = useRef<SparkRenderSession | null>(null)
+  const meshRef = useRef<SplatMesh | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -24,6 +38,7 @@ export default function SplatViewport() {
     })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     const session = createSparkRenderSession(renderer)
+    sessionRef.current = session
 
     const resize = () => {
       const width = canvas.clientWidth
@@ -46,10 +61,49 @@ export default function SplatViewport() {
     return () => {
       cancelAnimationFrame(animationFrameId)
       window.removeEventListener('resize', resize)
+      sessionRef.current = null
+      const mesh = meshRef.current
+      if (mesh) {
+        meshRef.current = null
+        disposeSplatMesh(mesh)
+      }
       disposeSparkRenderSession(session)
       renderer.dispose()
     }
   }, [])
+
+  useEffect(() => {
+    const session = sessionRef.current
+    if (!asset || !session) return
+
+    let cancelled = false
+    let loadedMesh: SplatMesh | null = null
+
+    void loadLocalSplatMesh(asset)
+      .then((mesh) => {
+        if (cancelled || sessionRef.current !== session) {
+          disposeSplatMesh(mesh)
+          return
+        }
+
+        session.scene.add(mesh)
+        loadedMesh = mesh
+        meshRef.current = mesh
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          onAssetLoadError?.(error)
+        }
+      })
+
+    return () => {
+      cancelled = true
+      if (loadedMesh && meshRef.current === loadedMesh) {
+        meshRef.current = null
+        disposeSplatMesh(loadedMesh)
+      }
+    }
+  }, [asset, onAssetLoadError])
 
   return <canvas ref={canvasRef} aria-label="Gaussian splat viewport" />
 }
